@@ -1,82 +1,55 @@
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PLAY_RADIUS, terrainHeight } from './terrain.js';
 
-const WALK_SPEED = 3.2;
-const RUN_SPEED = 7.0;
+const WALK_SPEED = 1.8;
+const RUN_SPEED = 5.5;
 const ACCELERATION = 10;
 const JUMP_SPEED = 5.5;
 const GRAVITY = 16;
 const TURN_SPEED = 12;
-
-// A simple stylised character built from primitives. Feet sit at the root's origin.
-function buildCharacter() {
-  const mat = (color) => new THREE.MeshStandardMaterial({ color, roughness: 0.85 });
-  const skin = mat('#f1c7a5');
-  const tunic = mat('#f6f0e6');
-  const pants = mat('#6b7fa8');
-  const hair = mat('#4a3328');
-  const scarf = mat('#f08aa0');
-  const dark = mat('#2b2230');
-
-  const root = new THREE.Group();
-  const rig = new THREE.Group(); // bobs while walking
-  root.add(rig);
-
-  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.24, 0.42, 6, 16), tunic);
-  torso.position.y = 1.2;
-  rig.add(torso);
-
-  const neckScarf = new THREE.Mesh(new THREE.TorusGeometry(0.15, 0.06, 10, 20), scarf);
-  neckScarf.rotation.x = Math.PI / 2;
-  neckScarf.position.y = 1.6;
-  rig.add(neckScarf);
-
-  const head = new THREE.Group();
-  head.position.y = 1.83;
-  rig.add(head);
-  head.add(new THREE.Mesh(new THREE.SphereGeometry(0.2, 24, 16), skin));
-  const hairCap = new THREE.Mesh(
-    new THREE.SphereGeometry(0.215, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.55),
-    hair,
-  );
-  hairCap.rotation.x = -0.35;
-  head.add(hairCap);
-  for (const x of [-0.07, 0.07]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), dark);
-    eye.position.set(x, 0.0, 0.185);
-    head.add(eye);
-  }
-
-  const limb = (radius, length, material, x, y) => {
-    const pivot = new THREE.Group();
-    pivot.position.set(x, y, 0);
-    const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, length, 4, 10), material);
-    mesh.position.y = -(length / 2 + radius);
-    pivot.add(mesh);
-    rig.add(pivot);
-    return pivot;
-  };
-  const legL = limb(0.09, 0.62, pants, -0.12, 0.88);
-  const legR = limb(0.09, 0.62, pants, 0.12, 0.88);
-  const armL = limb(0.07, 0.48, tunic, -0.33, 1.52);
-  const armR = limb(0.07, 0.48, tunic, 0.33, 1.52);
-
-  root.traverse((o) => {
-    if (o.isMesh) o.castShadow = true;
-  });
-
-  return { root, rig, head, legL, legR, armL, armR };
-}
+const MODEL_URL = '/models/character.glb';
+const MODEL_YAW_OFFSET = Math.PI; // the model is authored facing -Z
 
 export class Player {
   constructor(scene) {
+    this.scene = scene;
     this.position = new THREE.Vector3(0, terrainHeight(0, 0), 0);
     this.velocity = new THREE.Vector3();
     this.facing = 0;
     this.onGround = true;
-    this.walkPhase = 0;
-    this.character = buildCharacter();
-    scene.add(this.character.root);
+    this.phase = 0; // shared 0..1 gait cycle so walk and run blend without foot sliding
+    this.root = new THREE.Group();
+    scene.add(this.root);
+  }
+
+  async load() {
+    const gltf = await new GLTFLoader().loadAsync(MODEL_URL);
+    const model = gltf.scene;
+    model.rotation.y = MODEL_YAW_OFFSET;
+    model.traverse((o) => {
+      if (o.isMesh) {
+        o.castShadow = true;
+        o.frustumCulled = false; // skinned bounds don't follow the animation
+      }
+    });
+    this.root.add(model);
+
+    this.mixer = new THREE.AnimationMixer(model);
+    const clip = (name) => gltf.animations.find((a) => a.name === name);
+    this.actions = {
+      idle: this.mixer.clipAction(clip('Idle')),
+      walk: this.mixer.clipAction(clip('Walk')),
+      run: this.mixer.clipAction(clip('Run')),
+    };
+    for (const action of Object.values(this.actions)) {
+      action.play();
+      action.setEffectiveWeight(0);
+    }
+    // Walk/run are driven by our own gait phase; idle plays at normal speed.
+    this.actions.walk.timeScale = 0;
+    this.actions.run.timeScale = 0;
+    this.actions.idle.setEffectiveWeight(1);
   }
 
   // How "on the grass" the player is, 0..1 — used to bend grass under their feet.
@@ -128,7 +101,6 @@ export class Player {
     }
 
     // Turn to face the direction of travel.
-    const horizontalSpeed = Math.hypot(this.velocity.x, this.velocity.z);
     if (move.lengthSq() > 0.01) {
       const target = Math.atan2(move.x, move.y);
       let delta = target - this.facing;
@@ -136,35 +108,39 @@ export class Player {
       this.facing += delta * (1 - Math.exp(-TURN_SPEED * dt));
     }
 
-    this.animate(dt, horizontalSpeed);
+    this.root.position.copy(this.position);
+    this.root.rotation.y = this.facing;
+    if (this.mixer) this.animate(dt, Math.hypot(this.velocity.x, this.velocity.z));
   }
 
+  // Blend idle -> walk -> run by speed, keeping both gaits on the same step cycle.
   animate(dt, speed) {
-    const c = this.character;
-    c.root.position.copy(this.position);
-    c.root.rotation.y = this.facing;
+    const { idle, walk, run } = this.actions;
+    const walkDur = walk.getClip().duration;
+    const runDur = run.getClip().duration;
 
-    const stride = THREE.MathUtils.clamp(speed / RUN_SPEED, 0, 1);
-    this.walkPhase += dt * (4 + speed * 1.6) * (speed > 0.1 ? 1 : 0);
-    const swing = Math.sin(this.walkPhase) * (0.25 + stride * 0.6) * Math.min(speed / 1.5, 1);
-
-    if (this.onGround) {
-      c.legL.rotation.x = swing;
-      c.legR.rotation.x = -swing;
-      c.armL.rotation.x = -swing * 0.8;
-      c.armR.rotation.x = swing * 0.8;
-      c.rig.position.y = Math.abs(Math.sin(this.walkPhase)) * 0.06 * Math.min(speed / 2, 1);
+    let wIdle, wWalk, wRun;
+    if (speed <= WALK_SPEED) {
+      wWalk = speed / WALK_SPEED;
+      wIdle = 1 - wWalk;
+      wRun = 0;
     } else {
-      // Tuck legs and lift arms in the air.
-      c.legL.rotation.x = THREE.MathUtils.lerp(c.legL.rotation.x, 0.6, 0.15);
-      c.legR.rotation.x = THREE.MathUtils.lerp(c.legR.rotation.x, -0.2, 0.15);
-      c.armL.rotation.x = THREE.MathUtils.lerp(c.armL.rotation.x, -1.2, 0.15);
-      c.armR.rotation.x = THREE.MathUtils.lerp(c.armR.rotation.x, -1.2, 0.15);
-      c.rig.position.y = 0;
+      wRun = Math.min((speed - WALK_SPEED) / (RUN_SPEED - WALK_SPEED), 1);
+      wWalk = 1 - wRun;
+      wIdle = 0;
     }
-    c.armL.rotation.z = -0.08;
-    c.armR.rotation.z = 0.08;
-    c.rig.rotation.x = stride * 0.12; // lean into a run
+    // In the air, freeze mid-stride rather than keep pedalling.
+    const cycleRate = this.onGround
+      ? THREE.MathUtils.lerp(1 / walkDur, 1 / runDur, wRun) * Math.max(speed / THREE.MathUtils.lerp(WALK_SPEED, RUN_SPEED, wRun), 0.3)
+      : 0;
+    this.phase = (this.phase + cycleRate * dt) % 1;
+
+    walk.time = this.phase * walkDur;
+    run.time = this.phase * runDur;
+    idle.setEffectiveWeight(wIdle);
+    walk.setEffectiveWeight(wWalk);
+    run.setEffectiveWeight(wRun);
+    this.mixer.update(dt);
   }
 }
 

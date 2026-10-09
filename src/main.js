@@ -92,6 +92,8 @@ window.addEventListener('resize', () => {
 
 // --- Loop ---------------------------------------------------------------------
 const timer = new THREE.Timer();
+
+await player.load();
 document.getElementById('loading').style.opacity = '0';
 setTimeout(() => document.getElementById('loading').remove(), 900);
 

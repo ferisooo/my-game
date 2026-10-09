@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Meadow</title>
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #f2d3c4; }
+      canvas { display: block; }
+      #overlay {
+        position: fixed; inset: 0; display: flex; align-items: flex-end; justify-content: center;
+        padding-bottom: 28px; pointer-events: none;
+        font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #fff; text-shadow: 0 1px 12px rgba(80, 40, 60, 0.45);
+        transition: opacity 0.6s ease;
+      }
+      #overlay .card {
+        text-align: center; padding: 10px 20px; border-radius: 14px;
+        background: rgba(255, 240, 245, 0.14); backdrop-filter: blur(6px);
+      }
+      #overlay h1 { margin: 0 0 6px; font-weight: 300; letter-spacing: 0.3em; font-size: 18px; }
+      #overlay p { margin: 4px 0; font-size: 13px; opacity: 0.9; }
+      #overlay.hidden { opacity: 0; }
+      #loading {
+        position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+        font-family: ui-sans-serif, system-ui, sans-serif; color: #fff; letter-spacing: 0.3em;
+        background: #f2d3c4; transition: opacity 0.8s ease;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">GROWING GRASS…</div>
+    <div id="overlay">
+      <div class="card">
+        <h1>MEADOW</h1>
+        <p>Click to play</p>
+        <p>WASD move · Shift run · Space jump · Mouse look · Scroll zoom · Esc pause</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
